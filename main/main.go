@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/windnow/dependinj"
+	"github.com/windnow/go_with_tests/dependinj"
 )
 
 type my_str string
