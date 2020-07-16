@@ -46,9 +46,7 @@ func TestWalk(t *testing.T) {
 		}
 
 		var got []string
-		walk(aMap, func(input string) {
-			got = append(got, input)
-		})
+		walk(aMap, fn(&got))
 
 		assertContains(t, got, "Bar")
 		assertContains(t, got, "Boz")
@@ -60,13 +58,12 @@ func TestWalk(t *testing.T) {
 		go func() {
 			aChannel <- Profile{33, "Berlin"}
 			aChannel <- Profile{34, "Aktobe"}
+			close(aChannel)
 		}()
 		var got []string
 		want := []string{"Berlin", "Aktobe"}
 
-		walk(aChannel, func(input string) {
-			got = append(got, input)
-		})
+		walk(aChannel, fn(&got))
 
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("got %q, want %q", got, want)
