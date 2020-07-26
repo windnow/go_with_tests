@@ -5,16 +5,11 @@ import (
 	"net/http"
 
 	"github.com/windnow/edusrv/internal/gameserver"
+	"github.com/windnow/edusrv/internal/inmemstore"
 )
 
-type inMemoryPlayerStore struct{}
-
-func (i *inMemoryPlayerStore) GetPlayerScore(name string) int {
-	return 123
-}
-
 func main() {
-	server := gameserver.NewServer(&inMemoryPlayerStore{})
+	server := gameserver.NewServer(inmemstore.NewInMemoryStore())
 
 	if err := http.ListenAndServe(":5000", server); err != nil {
 		log.Fatalf("could not listen on port 5000 %v", err)
