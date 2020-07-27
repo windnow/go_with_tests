@@ -105,6 +105,20 @@ func TestRecordingWinsAndRetrievingThem(t *testing.T) {
 	assertResponseBody(t, response.Body.String(), "3")
 }
 
+func TestLeague(t *testing.T) {
+	store := StubPlayerStore{}
+	server := gameserver.NewServer(&store)
+
+	t.Run("it return 200 on /league", func(t *testing.T) {
+		request, _ := http.NewRequest(http.MethodGet, "/league", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		assertStatusCode(t, response.Code, http.StatusOK)
+	})
+}
+
 func newPostWinRequest(name string) *http.Request {
 	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/players/%s", name), nil)
 	return req
