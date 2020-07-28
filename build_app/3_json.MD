@@ -472,3 +472,188 @@ func (i *InMemoryPlayerStore) GetLeague() []gs.Player {
 На самом деле это говорит нам, что позже нужно будет реализовать это, однако пока давайте оставим это
 
 Попытайтесь запустить тесты. Компиляция должна пройти успешно, так же как и тесты
+
+## Рефакторинг
+
+Тествоый код не очень хорошо выражает намерение, и в нем есть много шаблонного кода, который можно переработать
+
+```go
+func TestLeague(t *testing.T) {
+
+	t.Run("it returns thye league table as JSON", func(t *testing.T) {
+		wantedLeague := []gs.Player{
+			{"Cleo", 32},
+			{"Chris", 20},
+			{"Tiest", 14},
+		}
+		store := StubPlayerStore{nil, nil, wantedLeague}
+		server := gs.NewServer(&store)
+		request := newLeagueRequest()
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		got := getLeagueFromResponse(t, response.Body)
+		assertStatusCode(t, response.Code, http.StatusOK)
+		assertLeague(t, got, wantedLeague)
+	})
+
+}
+
+func assertLeague(t *testing.T, got, want []gs.Player) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func newLeagueRequest() *http.Request {
+	request, _ := http.NewRequest(http.MethodGet, "/league", nil)
+	return request
+}
+
+func getLeagueFromResponse(t *testing.T, body io.Reader) (league []gs.Player) {
+	t.Helper()
+
+	err := json.NewDecoder(body).Decode(&league)
+	if err != nil {
+		t.Fatalf("Unable to parse response from server %q into slice of Player, %v", body, err)
+	}
+
+	return league
+
+}
+```
+
+Последнее, что мы должны сделать, что бы наш сервер заработал - это убедиться, что возвращается заголовок с `content-type`, по которому компьютер мог бы понять что возвращается `JSON`
+
+## Сначала напишем тесты
+
+Добавьте это сравнение в существующий тест
+```go
+		if response.Result().Header.Get("content-type") != "application/json" {
+			t.Errorf("response did not have content-type of application/json, got %v", response.Result().Header)
+		}
+```
+
+## Запустите тест
+
+```
+    --- FAIL: TestLeague/it_returns_thye_league_table_as_JSON (0.00s)
+        server_test.go:137: response did not have content-type of application/json, got map[Content-Type:[text/plain; charset=utf-8]]
+```
+
+## Напишите достаточное количество кода для его прохождения
+
+Обновите `leagueHandler`
+
+```go
+func (p *PlayerServer) leagueHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("content-type", "application/json")
+	json.NewEncoder(w).Encode(p.store.GetLeague())
+}
+```
+
+Теперь тест должен пройти
+
+## Рефакторинг
+
+Добавим хелпер для `assertContentType`:
+
+```go
+const jsonContentType = "application/json"
+
+func assertContentType(t *testing.T, response httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if response.Result().Header.Get("content-type") != want {
+		t.Errorf("response did not have content-type of application/json, got %v", want)
+	}
+
+}
+```
+
+затем задействуте в тесте
+
+```go
+		assertContentType(t, response, jsonContentType)
+```
+
+Теперь, кодга мы уже разобрались с `PlayerServer`, мы можем переключиться на `InMemoryPlayerStore`, потому что если сейчас мы покажем код заказчику, то `/league` не будет работать
+
+Самый быстрый способ проверки это добавить в имеющийся интеграционный тест. Мы можем указать новый эндпойнт, и проверить что получаем корректный ответ с `/league`.
+
+## Сначала напишем тесты
+
+Можно использовать `t.Run` что бы разделить этот тест, а так же для повторного использования хелперов - снова демонстрируя важность рефакторинга тестов
+
+```go
+func TestRecordingWinsAndRetrievingThem(t *testing.T) {
+	store := inmemstore.NewInMemoryStore()
+	server := gs.NewServer(store)
+	player := "Pepper"
+
+	server.ServeHTTP(httptest.NewRecorder(), newPostWinRequest(player))
+	server.ServeHTTP(httptest.NewRecorder(), newPostWinRequest(player))
+	server.ServeHTTP(httptest.NewRecorder(), newPostWinRequest(player))
+
+	t.Run("get score", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, newGetScoreRequest(player))
+		assertStatusCode(t, response.Code, http.StatusOK)
+
+		assertResponseBody(t, response.Body.String(), "3")
+	})
+
+	t.Run("get league", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, newLeagueRequest())
+		assertStatusCode(t, response.Code, http.StatusOK)
+
+		got := getLeagueFromResponse(t, response.Body)
+		want := []gs.Player{
+			{player, 3},
+		}
+
+		assertLeague(t, got, want)
+	})
+}
+```
+
+## Запустите тест
+
+```
+   --- FAIL: TestRecordingWinsAndRetrievingThem/get_league (0.00s)
+        server_test.go:131: got [], want [{Pepper 3}]
+```
+
+## Напишем код для его прохождения
+
+`InMemoryPlayerStore` возвращает `nil` при вызове `GetLeague()`, поэтому нам нужно исправить его
+
+```go
+func (i *InMemoryPlayerStore) GetLeague() []gs.Player {
+	var league []gs.Player
+
+	for name, wins := range i.store {
+		league = append(league, gs.Player{name, wins})
+	}
+	return league
+}
+```
+
+Все, что нам нужно сделать, это пройтис по карте и сконвертировать каждую пару ключ/значение в `Player`
+
+Теперь тест должен пройти
+
+-------------------------------------------------------
+
+## Завершение
+
+Мы продолжили итеративно развивать нашу программу и использованием TDD, добавляя в нее возможность поддержки новых эндпойнтов в маршрутизаторе и теперь она может возвращать JSON для наших клиентов. В следующей главе мы рассмотрим хранение данных и сортировку лиги.
+
+Что мы рассмотрели:
+
+ - **Роутинг**. Стандартная библиотека предлагает простой в использовании тип для маршрутизации. Его полностью охватывает интерфейс `http.Handler`, в который назначаются маршруты для обработки и маршрутизации. Он не имеет некоторых функций, которые можно было бы ожидать, таких как переменные пути (н.р. /users/{id}). Можно с легкостью реализовать этот функционал самостоятельно, а так же можно рассмотреть возможность использования других библиотек маршрутизации, если возникнут сложности в разработке своей. Большинство популярных придерживается стандартного подхода, и так же реализуют `http.Handler`
+ - **Встраивание типов**. Мы частично коснулись этой техники, но [вы можете самостоятельно у знать о не из Effective Go](https://golang.org/doc/effective_go.html#embedding). Если есть некоторый функционал, который хотелось бы заимствовать, встраивание может оказаться чрезвычайно полезной, но не следует забывать о публичном API; раскрывайте только то, что подходит.
+
+ - **Сериализация/десериализация JSON**. Стандартная библиотека делает обыденной эту задачу. Кроме того, она настраиваемая и можно конфигурировать эти преобразования при необходимости.
