@@ -175,3 +175,300 @@ func NewServer(store PlayerStore) *PlayerServer {
 ```
 
 и удалите `func (p *PlayerServer) ServeHTTP(w http.ResponseWriter, r *http.Request)`. Она нам больше не нужна!
+
+## Встраивание
+
+Мы изменили второе свойство `PlayerServer`, удалив именованное свойство `router http.ServeMUX` и заменили его на `http.Handler`; это называется *встраивание*
+
+    Go не предоставляет обычную, основанное на типах, понятие 
+	подклассов. Но у него есть возможность «заимствовать» части
+	реализации внедряя типы в структуру или интерфейс.
+
+[Effective Go - Embedding](https://golang.org/doc/effective_go.html#embedding)
+
+Для нашего `PlayerServer` это значит что он получит все методы, имеющиеся в `http.Handler` имеющий лишь `ServeHTTP`.
+
+Мы назначаем на него маршрутизатор, создаваемый в `NewServer`, поскольку `http.ServeMux` имеет метод `ServeHTTP`.
+
+Это позволяет нам избавится от нашего метода `ServeHTTP`, так как он устанавливается через встроенный тип.
+
+Встраивание это очень интересная возможност языка. Вы можете использовать его с интерфейсами для комбинирования их в новых интерфесах
+
+```go
+type Animal interface {
+	Eater
+	Sleeper
+}
+```
+
+Так же встаривание можно использовать с конкретными типами, а не только с интефейсами, что позволит иметь доступ ко всем публичным методам и свойствам этого типа.
+
+## Какие недостатки
+
+Нужно быть осторожным со встраиванием, поскольку будут открыты все публичные методы и свойства встраиваемого типа. В нашем случае все нормально, поскольку встраивается лишь интерфейс, который нам нужно открыть (`http.Handler`) 
+
+Если бы мы поленились, и встроили `http.ServeMux` вмето этого (конкретный тип), это тоже работало бы, однако пользователи `PlayerServer` могли бы добавить новые маршруты к нашему серверу, т.к. `Handle(paht, handler)` является публичным
+
+**При встраивании типов задумайтесь, как это повлияет на на публичный API**
+
+Злоупотребление встраиванием - очень распростроненая ошибка, поскольку это добавляет мусора к API и раскрывает внутренности типа.
+
+Теперь, после реструктуризации нашего приложения мы легко можем добавлять новые маршруты и начнем с `/league`. Нужно что бы он возвращал некоторую полезную информацию.
+
+Мы должны возвращать некоторый JSON, выглядящий как то так:
+
+```json
+[
+	{
+		"Name": Bill,
+		"Wins":10
+	},
+	{
+		"Name":"Alice",
+		"Wins":15
+	}
+]
+```
+
+
+## Сначала напишем тесты
+
+Начнем с попытки получить из ответа что то значимое
+
+```go
+func TestLeague(t *testing.T) {
+	store := StubPlayerStore{}
+	server := gameserver.NewServer(&store)
+
+	t.Run("it return 200 on /league", func(t *testing.T) {
+		request, _ := http.NewRequest(http.MethodGet, "/league", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		var got []gameserver.Player
+
+		err := json.NewDecoder(response.Body).Decode(&got)
+		if err != nil {
+			t.Fatalf("Unable to parse response from server %q into slice of Player, `%v`", response.Body, err)
+		}
+
+		assertStatusCode(t, response.Code, http.StatusOK)
+	})
+
+}
+```
+
+## Почему не тестируем строку JSON?
+
+Вы могли бы возразить, что более простым начальным тестом было бы проверить на соответствие тела ответа некоторой строке JSON
+
+По моему опыту, тесты для строки JSON имеют следующие проблемы:
+
+ - *Хрупкость*: Если будет изменена модель данных, тест будет провален
+ - *Сложность отладки*: Может быть сложно понять, в чем реальная проблема при сравнивании двух строк JSON
+ - *Не верное стремление*: Хотя вывод и должен быть в JSON, на самом деле важно то, какие данные это данные, а не то, как они закодированы
+ - *Повторный тест стандартной библиотеки*: Нет необходимости проверять, какой JSON возвращает стандартная библиотека. Она уже протестирована. Не тестируйте код других людей.
+
+вместо этого нам нужно разобрать JSON в структуру данных, которые нам нужны для тестирования.
+
+## Моделирование данных
+
+Учитывая структуру JSON, похоже что нам нужен массив `Player` с некоторыми полями полями, поэтому создадим новый тип для получения этого.
+
+```go
+type Player struct {
+	Name string
+	Wins int
+}
+```
+
+## Разбор JSON
+
+```go
+	var got []gameserver.Player
+	err := json.NewDecoder(response.Body).Decode(&got)
+```
+
+Для разбора JSON в нашу модель данных мы создаем `Decoder` из пакета `encoding/json`, вызвав затем метод `Decode`. Декодуру нужно передать `io.Reader`, откуда будут читаться данные. В нашем случае это тело ответа `Body`
+
+`Decode` принимает объекта, в который будет предприята попытка распарсить. Поэтому мы создаем пустой срез `Player` строкой выше.
+
+Парсинг JSON с помощью `Decode` может вызвать ошибку, в случае которой нет смысла продолжать тестирование, поэтому, в случае ошибки, мы вызываем `t.Fatalf`. Обратите вниимание что тело ответа выводится, что бы проводящий тест мог понять, какая строка не может быть проанализирована.
+
+## Попытайтесь запустить тест
+
+```
+--- FAIL: TestLeague (0.00s)
+    --- FAIL: TestLeague/it_return_200_on_/league (0.00s)
+        server_test.go:123: Unable to parse response from server "" into slice of Player, `EOF`
+```
+
+Наш эндпойнт пока не возвращает тела ответа, поэтому оно не может быть распаршено в JSON.
+
+## Напишем минимум кода для прохождения теста
+
+```go
+func (p *PlayerServer) leagueHandler(w http.ResponseWriter, r *http.Request) {
+	leagueTable := []Player{
+		{"Chris", 20},
+	}
+	json.NewEncoder(w).Encode(leagueTable)
+
+	w.WriteHeader(http.StatusOK)
+}
+```
+
+Теперь тест пройдет
+
+## Кодирование и декодирование
+
+Обратите вниманиена прекрасную симметрию в стандартной библиотеке
+
+ - Для создания `Encoder`'а необходим `io.Writer`, который реализует `http.ResponseWriter`
+ - Для создания `Decodr`'а необходим `io.Reader`, которые реализует поле `Body` нашего наблюдателя.
+
+В этой книге мы уже использовали `io.Writer`, что еще раз демонстрирует его распространенность в стандартной библиотеке и то, как многие библиотеки легко работают с ним.
+
+## Рефакторинг
+
+Было бы неплохо отделить получение `leagueTable` от нашего обработчика, поскольку известно, что вскоре мы не будет получать жестко закодированные значения.
+
+```go
+func (p *PlayerServer) leagueHandler(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(p.getLeagueTable())
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func (p *PlayerServer) getLeagueTable() []Player {
+	return []Player{
+		{"Chris", 20},
+	}
+}
+```
+
+Далее мы хотим расширить нак тест т.о., что бы мы могли контролировать, какие данные должны быть получены.
+
+## Сначала напишем тест
+
+Мы можем обновить тест, что бы проверить, содержит ли таблицы лиги некоторого пользователя, которого мы держим в харнилище.
+
+Обновите `StubPlayerStore`, что бы позволить хранить в нем лигу, являющиейся срезом объектов `Player`. 
+
+```go
+type StubPlayerStore struct {
+	scores   map[string]int
+	winCalls []string
+	league   []gameserver.Player
+}
+```
+
+Далее, одновите текущий тест, поместив некоторых игроков и свойство лиги тестового хранилища, и проверьте, что они получены с сервера
+
+```go
+func TestLeague(t *testing.T) {
+
+	t.Run("it returns thye league table as JSON", func(t *testing.T) {
+		wantedLeague := []gs.Player{
+			{"Cleo", 32},
+			{"Chris", 20},
+			{"Tiest", 14},
+		}
+		store := StubPlayerStore{nil, nil, wantedLeague}
+		server := gs.NewServer(&store)
+		request, _ := http.NewRequest(http.MethodGet, "/league", nil)
+		response := httptest.NewRecorder()
+
+		server.ServeHTTP(response, request)
+
+		var got []gs.Player
+
+		err := json.NewDecoder(response.Body).Decode(&got)
+		if err != nil {
+			t.Fatalf("Unable to parse response from server %q into slice of Player, %v", response.Body, err)
+		}
+
+		assertStatusCode(t, response.Code, http.StatusOK)
+
+		if !reflect.DeepEqual(got, wantedLeague) {
+			t.Errorf("got %v, want %v", got, wantedLeague)
+		}
+	})
+
+}
+```
+
+
+## Запустите тест
+
+```
+./server_test.go:33:3: too few values in struct initializer
+./server_test.go:70:3: too few values in struct initializer
+```
+
+## Напишите минимальный код для запуска тестов и получения ошибки тестирования
+
+Нужно обновить другие тесты, поскольку появилось новое поле в `StubPlayerStore`; установите его в значение nil для других тестов
+
+При повторном запуске теста вы должны получить 
+
+```
+--- FAIL: TestLeague (0.00s)
+    --- FAIL: TestLeague/it_returns_thye_league_table_as_JSON (0.00s)
+        server_test.go:138: got [{Chris 20}], want [{Cleo 32} {Chris 20} {Tiest 14}
+```
+
+## Напишем минимум кода для прохождения теста
+
+Мы значем, что данные находятся в `StubPlayerStore`, являющийся реализацией абстракции интерфейса `PlayerStore`. Нам нужно обновить его, что бы любая реализация `PlayerStore` могла предоставить данные лиги
+
+```go
+type PlayerStore interface {
+	GetPlayerScore(name string) int
+	RecordWin(name string)
+	GetLeague() []Player
+}
+```
+
+Теперь мы можем обновить наш обработчик, что бы при вызове он возвращал захардкоженный список. Удалите метод `getLeagueTable()` затем обновите `leagueHandler`, что бы он вызывал `GetLeague()`.
+
+```go
+func (p *PlayerServer) leagueHandler(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(p.store.GetLeague())
+
+	w.WriteHeader(http.StatusOK)
+}
+```
+
+## Попытайтесь запустить тест.
+
+Компилятор выдаст ошибку, поскольку для `InMemoryPlayerStore` и `StubPlayerStore` не реализован новый метод, добавленный в интерфейс.
+
+Для `StubPlayerStore` исправить легко. Просто верните поле `league` добавленное ранее.
+
+```go
+func (s *StubPlayerStore) GetLeague() []gs.Player {
+	return s.league
+}
+```
+
+Вот так выглядит реализация `InMemoryPlayerStore`
+
+```go
+type InMemoryPlayerStore struct {
+	store map[string]int
+}
+```
+
+Хотя было бы не сложно «дложным образом» реализовать `GetLeague` перебирая карту, помните, что мы пытаемся писать минимальный объем кода, что бы тесты работали.
+
+```go
+func (i *InMemoryPlayerStore) GetLeague() []gs.Player {
+	return nil
+}
+```
+
+На самом деле это говорит нам, что позже нужно будет реализовать это, однако пока давайте оставим это
+
+Попытайтесь запустить тесты. Компиляция должна пройти успешно, так же как и тесты

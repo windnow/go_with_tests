@@ -1,20 +1,32 @@
 package inmemstore
 
-type inMemoryPlayerStore struct {
+import (
+	gs "github.com/windnow/edusrv/internal/gameserver"
+)
+
+// InMemoryPlayerStore ...
+type InMemoryPlayerStore struct {
 	store map[string]int
 }
 
-func (i *inMemoryPlayerStore) RecordWin(name string) {
+// RecordWin ...
+func (i *InMemoryPlayerStore) RecordWin(name string) {
 	i.store[name]++
 }
 
-func (i *inMemoryPlayerStore) GetPlayerScore(name string) int {
+// GetPlayerScore ...
+func (i *InMemoryPlayerStore) GetPlayerScore(name string) int {
 	return i.store[name]
 }
 
-// NewInMemoryStore...
-func NewInMemoryStore() *inMemoryPlayerStore {
-	return &inMemoryPlayerStore{
+// GetLeague ...
+func (i *InMemoryPlayerStore) GetLeague() []gs.Player {
+	return nil
+}
+
+// NewInMemoryStore ...
+func NewInMemoryStore() *InMemoryPlayerStore {
+	return &InMemoryPlayerStore{
 		map[string]int{},
 	}
 }
