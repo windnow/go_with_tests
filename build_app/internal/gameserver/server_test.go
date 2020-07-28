@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	gs "github.com/windnow/edusrv/internal/gameserver"
+	fs "github.com/windnow/edusrv/internal/infsstore"
 	"github.com/windnow/edusrv/internal/inmemstore"
 )
 
@@ -151,6 +153,25 @@ func TestLeague(t *testing.T) {
 		assertStatusCode(t, response.Code, http.StatusOK)
 		assertLeague(t, got, wantedLeague)
 		assertContentType(t, response, jsonContentType)
+	})
+
+}
+
+func TestFileSystemStore(t *testing.T) {
+	t.Run("/league from a reader", func(t *testing.T) {
+		database := strings.NewReader(`[
+			{"Name": "Cleo", "Wins": 10},
+			{"Name": "Chris", "Wins": 33}]`)
+		store := fs.NewFileSystemPlayerStore(database)
+
+		got := store.GetLeague()
+
+		want := []gs.Player{
+			{"Cleo", 10},
+			{"Chris", 33},
+		}
+
+		assertLeague(t, got, want)
 	})
 
 }
