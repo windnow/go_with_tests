@@ -1,18 +1,17 @@
 package gameserver_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
-	"strings"
 	"testing"
 
 	gs "github.com/windnow/edusrv/internal/gameserver"
 	fs "github.com/windnow/edusrv/internal/infsstore"
-	"github.com/windnow/edusrv/internal/inmemstore"
 )
 
 const jsonContentType = "application/json"
@@ -32,7 +31,7 @@ func (s *StubPlayerStore) RecordWin(name string) {
 	s.winCalls = append(s.winCalls, name)
 }
 
-func (s *StubPlayerStore) GetLeague() []gs.Player {
+func (s *StubPlayerStore) GetLeague() gs.League {
 	return s.league
 }
 func TestGETPlayers(t *testing.T) {
@@ -104,7 +103,10 @@ func TestStoreWins(t *testing.T) {
 }
 
 func TestRecordingWinsAndRetrievingThem(t *testing.T) {
-	store := inmemstore.NewInMemoryStore()
+
+	database, cleanDatabase := createTempFile(t, "")
+	defer cleanDatabase()
+	store := fs.NewFileSystemPlayerStore(database)
 	server := gs.NewServer(store)
 	player := "Pepper"
 
@@ -159,9 +161,11 @@ func TestLeague(t *testing.T) {
 
 func TestFileSystemStore(t *testing.T) {
 	t.Run("/league from a reader", func(t *testing.T) {
-		database := strings.NewReader(`[
+		database, clearDatabase := createTempFile(t, `[
 			{"Name": "Cleo", "Wins": 10},
 			{"Name": "Chris", "Wins": 33}]`)
+		defer clearDatabase()
+
 		store := fs.NewFileSystemPlayerStore(database)
 
 		got := store.GetLeague()
@@ -172,8 +176,55 @@ func TestFileSystemStore(t *testing.T) {
 		}
 
 		assertLeague(t, got, want)
+
+		got = store.GetLeague()
+		assertLeague(t, got, want)
 	})
 
+	t.Run("/get player score", func(t *testing.T) {
+		database, clearDatabase := createTempFile(t, `[
+			{"Name": "Cleo", "Wins": 10},
+			{"Name": "Chris", "Wins": 33}]`)
+		defer clearDatabase()
+		store := fs.NewFileSystemPlayerStore(database)
+
+		got := store.GetPlayerScore("Chris")
+		want := 33
+		assertScoreEquals(t, got, want)
+	})
+
+	t.Run("store wins for existing players", func(t *testing.T) {
+		database, cleanDatabase := createTempFile(t, `[
+			{"Name": "Cleo", "Wins": 10},
+			{"Name": "Chris", "Wins": 33}]`)
+		defer cleanDatabase()
+		store := fs.NewFileSystemPlayerStore(database)
+
+		store.RecordWin("Chris")
+
+		got := store.GetPlayerScore("Chris")
+		want := 34
+		assertScoreEquals(t, got, want)
+		if got != want {
+			t.Errorf("store state is %v", store.GetLeague())
+		}
+	})
+
+	t.Run("store wins for new players", func(t *testing.T) {
+		database, cleanDatabase := createTempFile(t, `[
+			{"Name": "Cleo", "Wins": 10},
+			{"Name": "Chris", "Wins": 33}]`)
+
+		defer cleanDatabase()
+
+		store := fs.NewFileSystemPlayerStore(database)
+
+		store.RecordWin("Pepper")
+
+		got := store.GetPlayerScore("Pepper")
+		want := 1
+		assertScoreEquals(t, got, want)
+	})
 }
 
 func newGetScoreRequest(name string) *http.Request {
@@ -189,10 +240,7 @@ func newLeagueRequest() *http.Request {
 func getLeagueFromResponse(t *testing.T, body io.Reader) (league []gs.Player) {
 	t.Helper()
 
-	err := json.NewDecoder(body).Decode(&league)
-	if err != nil {
-		t.Fatalf("Unable to parse response from server %q into slice of Player, %v", body, err)
-	}
+	league, _ = gs.NewLeague(body)
 
 	return
 
@@ -201,6 +249,13 @@ func getLeagueFromResponse(t *testing.T, body io.Reader) (league []gs.Player) {
 func newPostWinRequest(name string) *http.Request {
 	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/players/%s", name), nil)
 	return req
+}
+
+func assertScoreEquals(t *testing.T, got, want int) {
+	t.Helper()
+	if got != want {
+		t.Errorf("got %d, want %d", got, want)
+	}
 }
 
 func assertLeague(t *testing.T, got, want []gs.Player) {
@@ -229,5 +284,22 @@ func assertStatusCode(t *testing.T, got, want int) {
 	t.Helper()
 	if got != want {
 		t.Errorf("did not correct status code. got %d, want %d", got, want)
+	}
+}
+
+func createTempFile(t *testing.T, initialData string) (io.ReadWriteSeeker, func()) {
+	t.Helper()
+
+	tmpfile, err := ioutil.TempFile("", "db")
+
+	if err != nil {
+		t.Fatalf("could't create tmp file %v", err)
+	}
+
+	tmpfile.Write([]byte(initialData))
+
+	return tmpfile, func() {
+		tmpfile.Close()
+		os.Remove(tmpfile.Name())
 	}
 }
