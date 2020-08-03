@@ -3,26 +3,27 @@ package infsstore
 import (
 	"encoding/json"
 	"io"
+	"os"
 
 	gs "github.com/windnow/edusrv/internal/gameserver"
+	"github.com/windnow/edusrv/internal/tape"
 )
 
 // FileSystemPlayerStore ...
 type FileSystemPlayerStore struct {
-	database io.ReadWriteSeeker
+	database io.Writer
+	league   gs.League
 }
 
 // GetLeague ...
 func (f *FileSystemPlayerStore) GetLeague() gs.League {
-	f.database.Seek(0, 0)
-	league, _ := gs.NewLeague(f.database)
-	return league
+	return f.league
 }
 
 // GetPlayerScore ...
 func (f *FileSystemPlayerStore) GetPlayerScore(name string) int {
 
-	player := f.GetLeague().Find(name)
+	player := f.league.Find(name)
 
 	if player != nil {
 		return player.Wins
@@ -33,20 +34,24 @@ func (f *FileSystemPlayerStore) GetPlayerScore(name string) int {
 
 // RecordWin ...
 func (f *FileSystemPlayerStore) RecordWin(name string) {
-	league := f.GetLeague()
-	player := league.Find(name)
+	player := f.league.Find(name)
 
 	if player != nil {
 		player.Wins++
 	} else {
-		league = append(league, gs.Player{Name: name, Wins: 1})
+		f.league = append(f.league, gs.Player{Name: name, Wins: 1})
 	}
 
-	f.database.Seek(0, 0)
-	json.NewEncoder(f.database).Encode(league)
+	json.NewEncoder(f.database).Encode(f.league)
 }
 
 // NewFileSystemPlayerStore ...
 func NewFileSystemPlayerStore(database io.ReadWriteSeeker) *FileSystemPlayerStore {
-	return &FileSystemPlayerStore{database}
+	database.Seek(0, 0)
+	league, _ := gs.NewLeague(database)
+
+	return &FileSystemPlayerStore{
+		database: &tape.Tape{database.(*os.File)},
+		league:   league,
+	}
 }

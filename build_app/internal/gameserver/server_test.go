@@ -3,14 +3,13 @@ package gameserver_test
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"testing"
 
 	gs "github.com/windnow/edusrv/internal/gameserver"
+	. "github.com/windnow/edusrv/internal/helpers"
 	fs "github.com/windnow/edusrv/internal/infsstore"
 )
 
@@ -103,8 +102,7 @@ func TestStoreWins(t *testing.T) {
 }
 
 func TestRecordingWinsAndRetrievingThem(t *testing.T) {
-
-	database, cleanDatabase := createTempFile(t, "")
+	database, cleanDatabase := CreateTempFile(t, "")
 	defer cleanDatabase()
 	store := fs.NewFileSystemPlayerStore(database)
 	server := gs.NewServer(store)
@@ -161,7 +159,7 @@ func TestLeague(t *testing.T) {
 
 func TestFileSystemStore(t *testing.T) {
 	t.Run("/league from a reader", func(t *testing.T) {
-		database, clearDatabase := createTempFile(t, `[
+		database, clearDatabase := CreateTempFile(t, `[
 			{"Name": "Cleo", "Wins": 10},
 			{"Name": "Chris", "Wins": 33}]`)
 		defer clearDatabase()
@@ -182,7 +180,7 @@ func TestFileSystemStore(t *testing.T) {
 	})
 
 	t.Run("/get player score", func(t *testing.T) {
-		database, clearDatabase := createTempFile(t, `[
+		database, clearDatabase := CreateTempFile(t, `[
 			{"Name": "Cleo", "Wins": 10},
 			{"Name": "Chris", "Wins": 33}]`)
 		defer clearDatabase()
@@ -194,7 +192,7 @@ func TestFileSystemStore(t *testing.T) {
 	})
 
 	t.Run("store wins for existing players", func(t *testing.T) {
-		database, cleanDatabase := createTempFile(t, `[
+		database, cleanDatabase := CreateTempFile(t, `[
 			{"Name": "Cleo", "Wins": 10},
 			{"Name": "Chris", "Wins": 33}]`)
 		defer cleanDatabase()
@@ -211,7 +209,7 @@ func TestFileSystemStore(t *testing.T) {
 	})
 
 	t.Run("store wins for new players", func(t *testing.T) {
-		database, cleanDatabase := createTempFile(t, `[
+		database, cleanDatabase := CreateTempFile(t, `[
 			{"Name": "Cleo", "Wins": 10},
 			{"Name": "Chris", "Wins": 33}]`)
 
@@ -284,22 +282,5 @@ func assertStatusCode(t *testing.T, got, want int) {
 	t.Helper()
 	if got != want {
 		t.Errorf("did not correct status code. got %d, want %d", got, want)
-	}
-}
-
-func createTempFile(t *testing.T, initialData string) (io.ReadWriteSeeker, func()) {
-	t.Helper()
-
-	tmpfile, err := ioutil.TempFile("", "db")
-
-	if err != nil {
-		t.Fatalf("could't create tmp file %v", err)
-	}
-
-	tmpfile.Write([]byte(initialData))
-
-	return tmpfile, func() {
-		tmpfile.Close()
-		os.Remove(tmpfile.Name())
 	}
 }

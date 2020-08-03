@@ -594,6 +594,182 @@ func main() {
  - Третий аргумент определяет права для файла. В нашем случае все пользователи могут читать и записывать файл. (см [superuser.com](https://superuser.com/questions/295591/what-is-the-meaning-of-chmod-666) для деталей)
 
 
- Теперь все данные хранятся между запусками в файле. УРА!
+Теперь все данные сохраняются в файле между запусками. УРА!
 
- ## Еще проблемы с рефакторингом и производительностью
+## Больше рефакторинга и проблемы производительности
+
+Каждый раз при вызове `GetLeague()` или `GetPlayerScore()` мы читаем весь файл и преобразуем его в JSON. Мы не должны этого делать, поскольку `FileSystemStore` целиком ответственна за состояние лиги. Все, что нужно сделать, это прочитать файл при старте программы а так же обновить файл при изменении данных.
+
+Мы можем создать конструктор, который может производить некоторую инициализацию, и хранить лигу как значение Для чтения в `FileSystemStore`
+
+```go
+type FileSystemPlayerStore struct {
+	database io.ReadWriteSeeker
+	league   gs.League
+}
+
+func NewFileSystemPlayerStore(database io.ReadWriteSeeker) *FileSystemPlayerStore {
+	database.Seek(0, 0)
+	league, _ := gs.NewLeague(database)
+	return &FileSystemPlayerStore{
+		database: database,
+		league:   league,
+	}
+}
+```
+
+Это позволит считывать с диска лишь единожды. Теперь мы можем заменить все вызовы получения лиги с диска на `f.league`
+
+```go
+func (f *FileSystemPlayerStore) GetLeague() gs.League {
+	return f.league
+}
+
+func (f *FileSystemPlayerStore) GetPlayerScore(name string) int {
+
+	player := f.league.Find(name)
+
+	if player != nil {
+		return player.Wins
+	}
+
+	return 0
+}
+
+// RecordWin ...
+func (f *FileSystemPlayerStore) RecordWin(name string) {
+	player := f.league.Find(name)
+
+	if player != nil {
+		player.Wins++
+	} else {
+		f.league = append(f.league, gs.Player{Name: name, Wins: 1})
+	}
+
+	f.database.Seek(0, 0)
+	json.NewEncoder(f.database).Encode(f.league)
+}
+```
+
+Если попробывать запустить тест, то он будет жаловаться на инициализацию `FileSystemPlayerStore`. Исправить это можно вызовом нового конструктора, вместо создания объекта на месте
+
+    windnow:
+	В моем варианте ошибки не будет, т.к. я изначально использовал конструктор
+
+## Другие проблемы
+
+В том, как мы работаем с файлом есть некоторая наивность, которая может создать очень неприятную проблему в будущем.
+
+При обращении к `RecordWin` мы с помощью `Seek` идем к началу файла и затем записываем новые данные. Но что будет, если окажется, что новые данные стали меньше предыдущих?
+
+В текущих условиях это не важно. Мы не редактируем и не удаляем счет, так что данные могут только увеличиваться. Однако было бы безответственно оставить код как есть. Не исключено, что сценарий с удалением может появится.
+
+Как мы будем его тестировать? Все, что нам нужно сделать, это сначала отделить вид данных, которые мы пишим от собственно записи. Затем мы можем протестировать отдельно, что бы убедиться, что все работает так, как мы надеемся.
+
+Мы создадим новый тип, инкапсулирующий функционал "перезаписываем все с начала". Я назвал его `Tape`. Создайте файл со следующим содержимым
+
+```go
+package tape
+
+import "io"
+
+// Tape ...
+type Tape struct {
+	File io.ReadWriteSeeker
+}
+
+func (t *Tape) Write(p []byte) (n int, err error) {
+	t.File.Seek(0, 0)
+	return t.File.Write(p)
+}
+```
+
+Обратите внимание, что мы реализуем лишь `Write`, инкупсулирующая `Seek`, так что теперь `FileSystemStore` может иметь ссылку лишь на `Writer`.
+
+```go
+type FileSystemPlayerStore struct {
+	database io.Writer
+	league   gs.League
+}
+```
+
+Обновите конструктор для использования `Type`
+
+```go
+func NewFileSystemPlayerStore(database io.ReadWriteSeeker) *FileSystemPlayerStore {
+	database.Seek(0, 0)
+	league, _ := gs.NewLeague(database)
+
+	return &FileSystemPlayerStore{
+		database: &tape.Tape{database},
+		league:   league,
+	}
+}
+```
+
+В завершении мы можем получить дополнительный бонус, удалив вызов `Seek` из `RecordWin`. Да, это не очень впечетляет, но хотя бы это значит, если мы производим любую другой вид записи, мы можем надеятся что поведение нашего `Write` то, которое нам нужно. Так же это позволит нам протестировать и исправить потенциально проблемный код отдельно.
+
+Давайте напишем тест, в котором мы обновим оригинальное содержимое чем то меньшим по объему
+
+
+## Сначала напишем тест
+
+Наш тест будет создавать файл с некоторым содержимым, пытаться записать в него с использоватьем `Tape`, и затем читать его снова для получения содержимого файла. В `tape_test.go`:
+
+```go
+package tape
+
+import (
+	"io/ioutil"
+	"testing"
+
+	. "github.com/windnow/edusrv/internal/helpers"
+)
+
+func TestTape_Write(t *testing.T) {
+	file, clean := CreateTempFile(t, "12345")
+	defer clean()
+
+	tape := &Tape{file}
+
+	tape.Write([]byte("abc"))
+	file.Seek(0, 0)
+	newFileContent, _ := ioutil.ReadAll(file)
+
+	got := string(newFileContent)
+	want := "abc"
+
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+```
+
+## Попытайтесь запустить тест
+
+```
+=== RUN   TestTape_Write
+    TestTape_Write: /mnt/c/Users/ermek/develop/go_with_tests/build_app/internal/tape/tape_test.go:24: got "abc45", want "abc"
+--- FAIL: TestTape_Write (0.00s)
+```
+
+Как мы и думали, необходимые данные записываются, однако остается часть старых данных
+
+
+## Напишем немного кода для его прохождения
+
+`os.File` имеет функцию усечения, позволяющая эффективно очистить файл. Все, что нужно сделать, это вызвать её.
+
+Измените `Tape`:
+
+```go
+type Tape struct {
+	File *os.File
+}
+
+func (t *Tape) Write(p []byte) (n int, err error) {
+	t.File.Truncate(0)
+	t.File.Seek(0, 0)
+	return t.File.Write(p)
+}
+```
