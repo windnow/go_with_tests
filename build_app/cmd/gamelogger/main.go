@@ -20,7 +20,10 @@ func main() {
 		log.Fatalf("problem opening %s %v", dbFileName, err)
 	}
 
-	store := infsstore.NewFileSystemPlayerStore(db)
+	store, err := infsstore.NewFileSystemPlayerStore(db)
+	if err != nil {
+		log.Fatalf("problem creating file system player store, %v", err)
+	}
 	server := gameserver.NewServer(store)
 
 	if err := http.ListenAndServe(":5000", server); err != nil {

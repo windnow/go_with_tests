@@ -2,7 +2,6 @@ package tape
 
 import (
 	"io/ioutil"
-	"os"
 	"testing"
 
 	. "github.com/windnow/edusrv/internal/helpers"
@@ -12,7 +11,7 @@ func TestTape_Write(t *testing.T) {
 	file, clean := CreateTempFile(t, "12345")
 	defer clean()
 
-	tape := &Tape{file.(*os.File)}
+	tape := &Tape{file}
 
 	tape.Write([]byte("abc"))
 	file.Seek(0, 0)

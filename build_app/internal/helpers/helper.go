@@ -1,13 +1,13 @@
 package helpers
 
 import (
-	"io"
 	"io/ioutil"
 	"os"
 	"testing"
 )
 
-func CreateTempFile(t *testing.T, initialData string) (io.ReadWriteSeeker, func()) {
+// CreateTempFile ...
+func CreateTempFile(t *testing.T, initialData string) (*os.File, func()) {
 	t.Helper()
 
 	tmpfile, err := ioutil.TempFile("", "db")
